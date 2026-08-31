@@ -1,0 +1,49 @@
+name: Sync Nature terrestrial animals article
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'articles/Nature-Terrestrial-Animals-2026/article.md'
+      - '.github/workflows/sync-nature-terrestrial-animals.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download figure images from Springer Nature
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR='articles/Nature-Terrestrial-Animals-2026'
+          mkdir -p "$DIR/images"
+          BASE='https://media.springernature.com/full/springer-static/image/art%3A10.1038%2Fs41586-025-09722-4/MediaObjects'
+          curl -fL "$BASE/41586_2025_9722_Fig1_HTML.png" -o "$DIR/images/fig01_timescale.png"
+          curl -fL "$BASE/41586_2025_9722_Fig2_HTML.png" -o "$DIR/images/fig02_gene_turnover.png"
+          curl -fL "$BASE/41586_2025_9722_Fig3_HTML.png" -o "$DIR/images/fig03_convergent_functions.png"
+          curl -fL "$BASE/41586_2025_9722_Fig4_HTML.png" -o "$DIR/images/fig04_expansion_contraction.png"
+          curl -fL "$BASE/41586_2025_9722_Fig5_HTML.png" -o "$DIR/images/fig05_semi_vs_full.png"
+      - name: Generate local-path Markdown
+        shell: python
+        run: |
+          from pathlib import Path
+          d=Path('articles/Nature-Terrestrial-Animals-2026')
+          text=(d/'article.md').read_text()
+          prefix='https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/Nature-Terrestrial-Animals-2026/images/'
+          (d/'article_local.md').write_text(text.replace(prefix, 'images/'))
+      - name: Commit synchronized files
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/Nature-Terrestrial-Animals-2026/images articles/Nature-Terrestrial-Animals-2026/article_local.md
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Add Nature terrestrial figures and local Markdown'
+            git push
+          fi
