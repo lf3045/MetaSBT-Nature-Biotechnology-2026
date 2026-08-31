@@ -1,0 +1,49 @@
+name: Sync Nature Microbiology DNA-temperature article
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'articles/NatureMicrobiology-DNA-Temperature-2026/article.md'
+      - '.github/workflows/sync-naturemicrobiology-dna-temperature.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download figure images from Springer Nature
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR='articles/NatureMicrobiology-DNA-Temperature-2026'
+          mkdir -p "$DIR/images"
+          BASE='https://media.springernature.com/full/springer-static/image/art%3A10.1038%2Fs41564-026-02451-y/MediaObjects'
+          curl -fL "$BASE/41564_2026_2451_Fig1_HTML.png" -o "$DIR/images/fig01_temperature_prediction.png"
+          curl -fL "$BASE/41564_2026_2451_Fig2_HTML.png" -o "$DIR/images/fig02_within_taxa.png"
+          curl -fL "$BASE/41564_2026_2451_Fig3_HTML.png" -o "$DIR/images/fig03_gc50_4mers.png"
+          curl -fL "$BASE/41564_2026_2451_Fig4_HTML.png" -o "$DIR/images/fig04_gc_temperature_nutrients.png"
+      - name: Generate local-path Markdown
+        shell: python
+        run: |
+          from pathlib import Path
+          d=Path('articles/NatureMicrobiology-DNA-Temperature-2026')
+          text=(d/'article.md').read_text()
+          prefix='https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/NatureMicrobiology-DNA-Temperature-2026/images/'
+          text=text.replace(prefix, 'images/')
+          (d/'article_local.md').write_text(text)
+      - name: Commit synchronized files
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/NatureMicrobiology-DNA-Temperature-2026/images articles/NatureMicrobiology-DNA-Temperature-2026/article_local.md
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Add Nature Microbiology figures and local Markdown'
+            git push
+          fi
