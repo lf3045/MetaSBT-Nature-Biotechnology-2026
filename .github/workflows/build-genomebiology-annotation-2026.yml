@@ -1,0 +1,67 @@
+name: Build Genome Biology annotation package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'articles/GenomeBiology-Prokaryotic-Annotation-Benchmark-2026/article.md'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download article figures
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='articles/GenomeBiology-Prokaryotic-Annotation-Benchmark-2026'
+          mkdir -p "$target/images" downloads
+
+          download_fig() {
+            n="$1"; out="$2"
+            for size in full lw1200 lw685; do
+              url="https://media.springernature.com/${size}/springer-static/image/art%3A10.1186%2Fs13059-026-04262-0/MediaObjects/13059_2026_4262_Fig${n}_HTML.png"
+              echo "Trying $url"
+              if curl -fL --retry 3 --retry-delay 2 "$url" -o "$target/images/$out"; then
+                test -s "$target/images/$out" && return 0
+              fi
+            done
+            echo "Failed to download Fig. $n" >&2
+            return 1
+          }
+
+          download_fig 1 fig01_benchmark_overview.png
+          download_fig 2 fig02_ecoli_coding_density.png
+          download_fig 3 fig03_taxonomy_performance.png
+          download_fig 4 fig04_mag_frameshift.png
+          download_fig 5 fig05_decision_tree.png
+
+          file "$target"/images/*.png
+
+      - name: Build ZIP package
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f downloads/GenomeBiology-Prokaryotic-Annotation-Benchmark-2026.zip
+          zip -r downloads/GenomeBiology-Prokaryotic-Annotation-Benchmark-2026.zip \
+            articles/GenomeBiology-Prokaryotic-Annotation-Benchmark-2026
+
+      - name: Commit figures and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/GenomeBiology-Prokaryotic-Annotation-Benchmark-2026/images \
+                  downloads/GenomeBiology-Prokaryotic-Annotation-Benchmark-2026.zip
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Add Genome Biology annotation benchmark figures and ZIP'
+            git push
+          fi
