@@ -23,3 +23,5 @@
 ## 图片许可
 
 论文为 CC BY 4.0 Open Access。Springer Nature 权限页说明，文章中的图片和第三方材料在没有单独 credit line 排除的情况下均包含在该许可中。Fig.1 原文注明使用 BioRender 制作，转载和二次修改时建议保留原论文、作者和许可说明。
+
+> 本目录由自动工作流维护在线图片版与完整ZIP；更新本README会触发一次重新构建。
