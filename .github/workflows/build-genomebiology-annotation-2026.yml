@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'articles/GenomeBiology-Prokaryotic-Annotation-Benchmark-2026/article_local.md'
+      - 'articles/GenomeBiology-Prokaryotic-Annotation-Benchmark-2026/README.md'
 
 permissions:
   contents: write
