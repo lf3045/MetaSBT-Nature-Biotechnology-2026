@@ -1,0 +1,80 @@
+name: Build PanGenie 2022 article package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'articles/NatureGenetics-PanGenie-2022/article_local.md'
+      - '.github/workflows/build-pangenie-2022.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Nature Genetics figures
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='articles/NatureGenetics-PanGenie-2022'
+          mkdir -p "$target/images" downloads
+
+          download_fig() {
+            n="$1"; out="$2"
+            for size in full lw1200 lw685; do
+              url="https://media.springernature.com/${size}/springer-static/image/art%3A10.1038%2Fs41588-022-01043-w/MediaObjects/41588_2022_1043_Fig${n}_HTML.png"
+              echo "Trying $url"
+              if curl -fL --retry 3 --retry-delay 2 "$url" -o "$target/images/$out"; then
+                test -s "$target/images/$out" && return 0
+              fi
+            done
+            echo "Failed to download Fig. $n" >&2
+            return 1
+          }
+
+          download_fig 1 fig01_overview.png
+          download_fig 2 fig02_callset_statistics.png
+          download_fig 3 fig03_leave_one_out.png
+          download_fig 4 fig04_large_cohort.png
+          download_fig 5 fig05_ld_analysis.png
+          file "$target"/images/*.png
+
+      - name: Build online Markdown
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          target = Path('articles/NatureGenetics-PanGenie-2022')
+          text = (target / 'article_local.md').read_text(encoding='utf-8')
+          raw = 'https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/NatureGenetics-PanGenie-2022/images/'
+          text = text.replace('(images/', '(' + raw)
+          (target / 'article.md').write_text(text, encoding='utf-8')
+          PY
+
+      - name: Build ZIP package
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f downloads/NatureGenetics-PanGenie-2022.zip
+          zip -r downloads/NatureGenetics-PanGenie-2022.zip \
+            articles/NatureGenetics-PanGenie-2022
+
+      - name: Commit figures, online Markdown and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/NatureGenetics-PanGenie-2022/images \
+                  articles/NatureGenetics-PanGenie-2022/article.md \
+                  downloads/NatureGenetics-PanGenie-2022.zip
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Build PanGenie article figures and ZIP'
+            git push
+          fi
