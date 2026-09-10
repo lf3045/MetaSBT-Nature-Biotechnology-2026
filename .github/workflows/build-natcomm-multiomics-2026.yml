@@ -1,0 +1,78 @@
+name: Build Nature Communications microbiome multi-omics package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'articles/NatureCommunications-Microbiome-MultiOmics-2026/article_local.md'
+      - '.github/workflows/build-natcomm-multiomics-2026.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Nature Communications figures
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='articles/NatureCommunications-Microbiome-MultiOmics-2026'
+          mkdir -p "$target/images" downloads
+
+          download_fig() {
+            n="$1"; out="$2"
+            for size in full lw1200 lw685; do
+              url="https://media.springernature.com/${size}/springer-static/image/art%3A10.1038%2Fs41467-026-77539-4/MediaObjects/41467_2026_77539_Fig${n}_HTML.png"
+              echo "Trying $url"
+              if curl -fL --retry 3 --retry-delay 2 "$url" -o "$target/images/$out"; then
+                test -s "$target/images/$out" && return 0
+              fi
+            done
+            echo "Failed to download Fig. $n" >&2
+            return 1
+          }
+
+          download_fig 1 fig01_molecular_interactions.png
+          download_fig 2 fig02_best_practices_roadmap.png
+          file "$target"/images/*.png
+
+      - name: Build online Markdown
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          target = Path('articles/NatureCommunications-Microbiome-MultiOmics-2026')
+          text = (target / 'article_local.md').read_text(encoding='utf-8')
+          base = 'https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/NatureCommunications-Microbiome-MultiOmics-2026/'
+          text = text.replace('](images/', '](' + base + 'images/')
+          (target / 'article.md').write_text(text, encoding='utf-8')
+          PY
+
+      - name: Build ZIP package
+        shell: bash
+        run: |
+          set -euo pipefail
+          zipname='downloads/NatureCommunications-Microbiome-MultiOmics-2026.zip'
+          rm -f "$zipname"
+          zip -r "$zipname" articles/NatureCommunications-Microbiome-MultiOmics-2026
+
+      - name: Commit figures, online Markdown and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/NatureCommunications-Microbiome-MultiOmics-2026/article.md \
+                  articles/NatureCommunications-Microbiome-MultiOmics-2026/images \
+                  downloads/NatureCommunications-Microbiome-MultiOmics-2026.zip
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Build Nature Communications multi-omics article package'
+            git push
+          fi
