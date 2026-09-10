@@ -1,0 +1,80 @@
+name: Build beneficial microbe breeding article package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'articles/NatureCommunications-Beneficial-Microbe-Breeding-2026/article_local.md'
+      - '.github/workflows/build-beneficial-microbe-breeding-2026.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Nature Communications figures
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='articles/NatureCommunications-Beneficial-Microbe-Breeding-2026'
+          mkdir -p "$target/images" downloads
+
+          download_fig() {
+            n="$1"; out="$2"
+            for size in full lw1200 lw685; do
+              url="https://media.springernature.com/${size}/springer-static/image/art%3A10.1038%2Fs41467-026-76260-6/MediaObjects/41467_2026_76260_Fig${n}_HTML.png"
+              echo "Trying $url"
+              if curl -fL --retry 3 --retry-delay 2 "$url" -o "$target/images/$out"; then
+                test -s "$target/images/$out" && return 0
+              fi
+            done
+            echo "Failed to download Fig. $n" >&2
+            return 1
+          }
+
+          download_fig 1 fig01_dual_ecological_engineering.png
+          download_fig 2 fig02_challenges.png
+          download_fig 3 fig03_soil_health_strategies.png
+          file "$target"/images/*.png
+
+      - name: Build online Markdown
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('articles/NatureCommunications-Beneficial-Microbe-Breeding-2026')
+          text = (p/'article_local.md').read_text(encoding='utf-8')
+          base = 'https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/NatureCommunications-Beneficial-Microbe-Breeding-2026/images/'
+          for name in [
+              'fig01_dual_ecological_engineering.png',
+              'fig02_challenges.png',
+              'fig03_soil_health_strategies.png']:
+              text = text.replace(f'images/{name}', base + name)
+          (p/'article.md').write_text(text, encoding='utf-8')
+
+      - name: Build ZIP package
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f downloads/NatureCommunications-Beneficial-Microbe-Breeding-2026.zip
+          zip -r downloads/NatureCommunications-Beneficial-Microbe-Breeding-2026.zip \
+            articles/NatureCommunications-Beneficial-Microbe-Breeding-2026
+
+      - name: Commit figures, online Markdown and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/NatureCommunications-Beneficial-Microbe-Breeding-2026/article.md \
+                  articles/NatureCommunications-Beneficial-Microbe-Breeding-2026/images \
+                  downloads/NatureCommunications-Beneficial-Microbe-Breeding-2026.zip
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Add beneficial microbe breeding figures and ZIP'
+            git push
+          fi
