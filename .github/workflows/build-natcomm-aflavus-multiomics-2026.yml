@@ -1,0 +1,67 @@
+name: Build Nature Communications A. flavus multi-omics package
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'articles/NatureCommunications-Aflavus-MultiOmics-2026/article_local.md'
+      - 'articles/NatureCommunications-Aflavus-MultiOmics-2026/README.md'
+      - 'articles/NatureCommunications-Aflavus-MultiOmics-2026/figure_manifest.md'
+      - '.github/workflows/build-natcomm-aflavus-multiomics-2026.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download publisher-provided complete figures
+        run: |
+          set -euo pipefail
+          DIR='articles/NatureCommunications-Aflavus-MultiOmics-2026/images'
+          mkdir -p "$DIR"
+          base='https://media.springernature.com/lw685/springer-static/image/art%3A10.1038%2Fs41467-026-70721-8/MediaObjects'
+          curl -L --fail --retry 3 "$base/41467_2026_70721_Fig1_HTML.png" -o "$DIR/fig01_population_phylogeography.png"
+          curl -L --fail --retry 3 "$base/41467_2026_70721_Fig2_HTML.png" -o "$DIR/fig02_metabolic_diversity.png"
+          curl -L --fail --retry 3 "$base/41467_2026_70721_Fig3_HTML.png" -o "$DIR/fig03_pangenome.png"
+          curl -L --fail --retry 3 "$base/41467_2026_70721_Fig4_HTML.png" -o "$DIR/fig04_bgc_partial_explanation.png"
+          curl -L --fail --retry 3 "$base/41467_2026_70721_Fig5_HTML.png" -o "$DIR/fig05_environment_association.png"
+          curl -L --fail --retry 3 "$base/41467_2026_70721_Fig6_HTML.png" -o "$DIR/fig06_mgwas_knockout.png"
+          curl -L --fail --retry 3 "$base/41467_2026_70721_Fig7_HTML.png" -o "$DIR/fig07_primary_metabolism_model.png"
+
+      - name: Build online Markdown
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src=Path('articles/NatureCommunications-Aflavus-MultiOmics-2026/article_local.md')
+          dst=Path('articles/NatureCommunications-Aflavus-MultiOmics-2026/article.md')
+          s=src.read_text()
+          base='https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/NatureCommunications-Aflavus-MultiOmics-2026/images/'
+          for fn in [
+              'fig01_population_phylogeography.png','fig02_metabolic_diversity.png','fig03_pangenome.png',
+              'fig04_bgc_partial_explanation.png','fig05_environment_association.png','fig06_mgwas_knockout.png',
+              'fig07_primary_metabolism_model.png']:
+              s=s.replace('images/'+fn, base+fn)
+          dst.write_text(s)
+          PY
+
+      - name: Build ZIP package
+        run: |
+          mkdir -p downloads
+          rm -f downloads/NatureCommunications-Aflavus-MultiOmics-2026.zip
+          zip -qr downloads/NatureCommunications-Aflavus-MultiOmics-2026.zip articles/NatureCommunications-Aflavus-MultiOmics-2026
+
+      - name: Commit figures, online Markdown and ZIP
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/NatureCommunications-Aflavus-MultiOmics-2026 downloads/NatureCommunications-Aflavus-MultiOmics-2026.zip
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Build A. flavus multi-omics article package'
+            git push
+          fi
