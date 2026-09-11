@@ -1,0 +1,69 @@
+name: Build Nature Communications Dici transposon package
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-natcomm-dici-2026.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download original Nature Communications figures
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR='articles/NatureCommunications-Dici-Transposon-2026/images'
+          mkdir -p "$DIR"
+          curl -fL --retry 3 'https://media.springernature.com/lw685/springer-static/image/art%3A10.1038%2Fs41467-026-74608-6/MediaObjects/41467_2026_74608_Fig1_HTML.png' -o "$DIR/fig01_population_structure.png"
+          curl -fL --retry 3 'https://media.springernature.com/lw685/springer-static/image/art%3A10.1038%2Fs41467-026-74608-6/MediaObjects/41467_2026_74608_Fig2_HTML.png' -o "$DIR/fig02_transposon_content.png"
+          curl -fL --retry 3 'https://media.springernature.com/lw685/springer-static/image/art%3A10.1038%2Fs41467-026-74608-6/MediaObjects/41467_2026_74608_Fig3_HTML.png' -o "$DIR/fig03_dici_structure.png"
+          curl -fL --retry 3 'https://media.springernature.com/lw685/springer-static/image/art%3A10.1038%2Fs41467-026-74608-6/MediaObjects/41467_2026_74608_Fig4_HTML.png' -o "$DIR/fig04_chromosomal_rearrangements.png"
+          curl -fL --retry 3 'https://media.springernature.com/lw685/springer-static/image/art%3A10.1038%2Fs41467-026-74608-6/MediaObjects/41467_2026_74608_Fig5_HTML.png' -o "$DIR/fig05_experimental_evolution.png"
+          curl -fL --retry 3 'https://media.springernature.com/lw685/springer-static/image/art%3A10.1038%2Fs41467-026-74608-6/MediaObjects/41467_2026_74608_Fig6_HTML.png' -o "$DIR/fig06_dici_family_phylogeny.png"
+          file "$DIR"/*.png
+
+      - name: Build online Markdown
+        shell: python
+        run: |
+          from pathlib import Path
+          d = Path('articles/NatureCommunications-Dici-Transposon-2026')
+          text = (d / 'article_local.md').read_text(encoding='utf-8')
+          prefix = 'https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/NatureCommunications-Dici-Transposon-2026/'
+          text = text.replace('](images/', '](' + prefix + 'images/')
+          (d / 'article.md').write_text(text, encoding='utf-8')
+
+      - name: Build ZIP package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloads
+          rm -f downloads/NatureCommunications-Dici-Transposon-2026.zip
+          zip -r downloads/NatureCommunications-Dici-Transposon-2026.zip \
+            articles/NatureCommunications-Dici-Transposon-2026/article.md \
+            articles/NatureCommunications-Dici-Transposon-2026/article_local.md \
+            articles/NatureCommunications-Dici-Transposon-2026/README.md \
+            articles/NatureCommunications-Dici-Transposon-2026/figure_manifest.md \
+            articles/NatureCommunications-Dici-Transposon-2026/images
+
+      - name: Commit figures, online Markdown and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/NatureCommunications-Dici-Transposon-2026/article.md \
+                  articles/NatureCommunications-Dici-Transposon-2026/images \
+                  downloads/NatureCommunications-Dici-Transposon-2026.zip
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Build Dici transposon article package'
+            git push
+          fi
