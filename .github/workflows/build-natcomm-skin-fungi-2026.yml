@@ -1,0 +1,64 @@
+name: Build Nature Communications skin fungi package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'articles/NatureCommunications-Skin-Fungi-2026/article_local.md'
+      - '.github/workflows/build-natcomm-skin-fungi-2026.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download unmodified Nature Communications figures
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='articles/NatureCommunications-Skin-Fungi-2026'
+          mkdir -p "$target/images" downloads
+          base='https://media.springernature.com/lw685/springer-static/image/art%3A10.1038%2Fs41467-026-74431-z/MediaObjects'
+          curl -fL --retry 3 "$base/41467_2026_74431_Fig1_HTML.png" -o "$target/images/fig01_clinical_phylogeny.png"
+          curl -fL --retry 3 "$base/41467_2026_74431_Fig2_HTML.png" -o "$target/images/fig02_genome_size_busco.png"
+          curl -fL --retry 3 "$base/41467_2026_74431_Fig3_HTML.png" -o "$target/images/fig03_phylogeny_orthogroups.png"
+          curl -fL --retry 3 "$base/41467_2026_74431_Fig4_HTML.png" -o "$target/images/fig04_functional_annotations.png"
+          curl -fL --retry 3 "$base/41467_2026_74431_Fig5_HTML.png" -o "$target/images/fig05_secreted_enzymes.png"
+          curl -fL --retry 3 "$base/41467_2026_74431_Fig6_HTML.png" -o "$target/images/fig06_adhesins_virulence.png"
+          file "$target"/images/*.png
+
+      - name: Build online Markdown
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='articles/NatureCommunications-Skin-Fungi-2026'
+          raw='https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/NatureCommunications-Skin-Fungi-2026/images/'
+          sed "s#](images/#](${raw}#g" "$target/article_local.md" > "$target/article.md"
+
+      - name: Build ZIP package
+        shell: bash
+        run: |
+          set -euo pipefail
+          zipfile='downloads/NatureCommunications-Skin-Fungi-2026.zip'
+          rm -f "$zipfile"
+          zip -r "$zipfile" articles/NatureCommunications-Skin-Fungi-2026
+
+      - name: Commit figures, online Markdown and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/NatureCommunications-Skin-Fungi-2026/article.md \
+                  articles/NatureCommunications-Skin-Fungi-2026/images \
+                  downloads/NatureCommunications-Skin-Fungi-2026.zip
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Build skin fungi comparative genomics article package'
+            git push
+          fi
