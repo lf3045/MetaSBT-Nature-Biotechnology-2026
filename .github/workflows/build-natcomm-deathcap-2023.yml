@@ -1,0 +1,66 @@
+name: Build Nature Communications death cap article package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-natcomm-deathcap-2023.yml'
+      - 'articles/NatureCommunications-DeathCap-Unisexuality-2023/article_local.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download original figures 1 to 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir='articles/NatureCommunications-DeathCap-Unisexuality-2023'
+          mkdir -p "$dir/images" downloads
+          base='https://media.springernature.com/lw685/springer-static/image/art%3A10.1038%2Fs41467-023-42317-z/MediaObjects'
+          for i in 1 2 3 4 5; do
+            target="$(printf '%s/images/fig%02d.png' "$dir" "$i")"
+            curl -fL --retry 4 --retry-delay 3 --connect-timeout 15 --max-time 120 \
+              "$base/41467_2023_42317_Fig"$i"_HTML.png" -o "$target"
+            test "$(stat -c %s "$target")" -gt 5000
+            file "$target" | grep -qi 'PNG image data'
+          done
+
+      - name: Rebuild online Markdown
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir='articles/NatureCommunications-DeathCap-Unisexuality-2023'
+          raw='https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/NatureCommunications-DeathCap-Unisexuality-2023/images/'
+          sed "s#](images/#]($raw#g" "$dir/article_local.md" > "$dir/article.md"
+
+      - name: Create complete download ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          zipfile='downloads/NatureCommunications-DeathCap-Unisexuality-2023.zip'
+          rm -f "$zipfile"
+          zip -r "$zipfile" articles/NatureCommunications-DeathCap-Unisexuality-2023 \
+            -x '*/.DS_Store'
+
+      - name: Commit image assets and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/NatureCommunications-DeathCap-Unisexuality-2023/article.md \
+                  articles/NatureCommunications-DeathCap-Unisexuality-2023/images \
+                  downloads/NatureCommunications-DeathCap-Unisexuality-2023.zip
+          if git diff --cached --quiet; then
+            echo 'Nothing new to commit'
+          else
+            git commit -m 'Sync death cap article figures and ZIP package'
+            git push
+          fi
