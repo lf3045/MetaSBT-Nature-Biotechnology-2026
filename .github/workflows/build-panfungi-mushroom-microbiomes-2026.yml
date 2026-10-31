@@ -19,37 +19,65 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Inspect published image and PDF sources
+      - name: Install packages
+        run: python -m pip install pillow requests
+      - name: Download and validate complete figures
         shell: bash
         run: |
-          python -m pip install requests beautifulsoup4
           python - <<'PY'
-          import requests,re
-          from bs4 import BeautifulSoup
-          u='https://www.maxapress.com/article/id/6979765dfa6c580564f2873f'
-          s=requests.Session()
-          s.headers['User-Agent']='Mozilla/5.0 (academic article illustration retrieval)'
-          r=s.get(u,timeout=60)
-          print('Page',r.status_code,'bytes',len(r.content), 'final',r.url)
-          print('First',r.text[:250])
-          soup=BeautifulSoup(r.text,'html.parser')
-          matches=[]
-          for img in soup.select('img'):
-              attr={k:v for k,v in img.attrs.items() if k in ['src','data-src','data-original','alt','title']}
-              pp=str(img.parent.get_text(' ',strip=True))[:140]
-              src=str(attr.get('src') or attr.get('data-src') or '')
-              matches.append((src,attr,pp))
-          print('IMAGE COUNT',len(matches))
-          for idx,item in enumerate(matches[:90]): print('IMAGE',idx,repr(item))
-          for needle in ['Macro- and micro-habitat','Abiotic and biotic','Functions of mushroom-forming','The proposed holistic','fig1','fig. 1','figure1']:
-              j=r.text.lower().find(needle.lower())
-              print('NEEDLE',needle,j,r.text[max(0,j-350):j+300] if j>=0 else '')
-          for p in [
-           'https://www.maxapress.com/data/article/panfungi/preview/pdf/panfungi-0025-0003.pdf',
-           'https://www.maxapress.com/data/article/opr/preview/pdf/panfungi-0025-0003.pdf'
-          ]:
-              try:
-                  v=s.get(p,timeout=75)
-                  print('PDF',p,v.status_code,len(v.content),v.content[:12])
-              except Exception as exc: print('PDF ERR',p,str(exc))
+          import requests
+          from pathlib import Path
+          from PIL import Image
+          from io import BytesIO
+          d=Path("articles/Panfungi-Mushroom-Microbiomes-2026")
+          (d/"images").mkdir(parents=True,exist_ok=True)
+          session=requests.Session()
+          session.headers["User-Agent"]="Mozilla/5.0"
+          lines=["figure\toriginal_url\twidth\theight\tbytes"]
+          for i in range(1,5):
+              u=f"https://map-data.maxapress.com//map-data//panfungi/2026/1/PIC/panfungi-0025-0003-{i}.jpg"
+              r=session.get(u,timeout=90)
+              print("Figure",i,r.status_code,len(r.content))
+              r.raise_for_status()
+              source=Image.open(BytesIO(r.content))
+              source.load()
+              assert source.width>400 and source.height>290,(i,source.size)
+              dst=d/"images"/f"fig{i:02d}.png"
+              source.save(dst,format="PNG",optimize=True)
+              check=Image.open(dst)
+              check.verify()
+              lines.append(f"Fig.{i}\t{u}\t{source.width}\t{source.height}\t{dst.stat().st_size}")
+              print("Saved",str(dst),source.size,dst.stat().st_size)
+          (d/"figure_sources.tsv").write_text("\n".join(lines)+"\n",encoding="utf-8")
           PY
+      - name: Generate online article and archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          d=Path("articles/Panfungi-Mushroom-Microbiomes-2026")
+          content=(d/"article_local.md").read_text(encoding="utf-8")
+          for i in range(1,5):
+              name=f"fig{i:02d}.png"
+              assert (d/"images"/name).exists()
+              assert content.count("](images/"+name+")")==1
+          raw="https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/Panfungi-Mushroom-Microbiomes-2026/images/"
+          (d/"article.md").write_text(content.replace("](images/","]("+raw),encoding="utf-8")
+          PY
+          mkdir -p downloads
+          zipfile="downloads/Panfungi-Mushroom-Microbiomes-2026.zip"
+          rm -f "$zipfile"
+          zip -r "$zipfile" articles/Panfungi-Mushroom-Microbiomes-2026
+          unzip -t "$zipfile"
+      - name: Commit article figures and zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add articles/Panfungi-Mushroom-Microbiomes-2026/article.md articles/Panfungi-Mushroom-Microbiomes-2026/images articles/Panfungi-Mushroom-Microbiomes-2026/figure_sources.tsv downloads/Panfungi-Mushroom-Microbiomes-2026.zip
+          if ! git diff --cached --quiet; then
+              git commit -m "Publish Panfungi mushroom microbiomes article package"
+              git push
+          fi
