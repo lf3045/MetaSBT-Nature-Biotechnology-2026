@@ -1,0 +1,145 @@
+name: Build IMA Fungus metatranscriptomics article and figures
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-imafungus-metatranscriptomics-2026.yml'
+      - 'articles/IMAFungus-Fungal-Metatranscriptomics-2026/article_local.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install image tools
+        run: python -m pip install pillow requests
+
+      - name: Get four original main figures from PMC Open Access S3 data
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlparse
+          import requests, re, xml.etree.ElementTree as ET
+          from PIL import Image
+
+          dir=Path('articles/IMAFungus-Fungal-Metatranscriptomics-2026')
+          img=dir/'images'
+          img.mkdir(parents=True,exist_ok=True)
+          s=requests.Session()
+          s.headers.update({'User-Agent':'IMA-Fungus-article-package/1.0 (academic-reuse)'})
+          meta=None
+          for v in [1,2,3]:
+              u='https://pmc-oa-opendata.s3.amazonaws.com/PMC13150532.%d/PMC13150532.%d.json' % (v,v)
+              r=s.get(u,timeout=45)
+              print('Metadata',u,r.status_code)
+              if r.ok:
+                  meta=r.json()
+                  break
+          if not meta:
+              raise RuntimeError('Cannot locate PMC13150532 metadata in new PMC S3 service')
+          print('license',meta.get('license_code'))
+          media=meta.get('media_urls') or []
+          xmlurl=meta.get('xml_url')
+          print('media URL count',len(media),'xml',xmlurl)
+          xml=s.get(xmlurl,timeout=60)
+          xml.raise_for_status()
+          root=ET.fromstring(xml.content)
+          hrefns='{http://www.w3.org/1999/xlink}href'
+
+          # Link each original figure to its publisher-supplied graphic via the source JATS XML.
+          figs={}
+          for f in root.iter('fig'):
+              label=''.join((f.findtext('label') or '').split())
+              match=re.search(r'(?:Figure|Fig\.?)([1-4])\b',label,re.I)
+              if not match:
+                  continue
+              n=int(match.group(1))
+              graph=f.find('.//graphic')
+              if graph is None:
+                  graph=f.find('.//{*}graphic')
+              if graph is None:
+                  continue
+              href=graph.attrib.get(hrefns) or graph.attrib.get('href') or ''
+              figs[n]=href
+          print('Figure references',figs)
+          def media_name(m):
+              if isinstance(m,dict):
+                  m=m.get('url') or m.get('href') or m.get('s3_url') or ''
+              return (m,str(m).split('?')[0].split('/')[-1].lower())
+
+          # Some JATS deposits use explicit graphic hrefs; match that against media metadata.
+          for n in range(1,5):
+              href=figs.get(n,'')
+              if not href:
+                  raise RuntimeError('Missing original source JATS graphic for Figure %d' % n)
+              wanted=Path(href).name.lower()
+              candidates=[]
+              for item in media:
+                  url,name=media_name(item)
+                  if name==wanted or name.split('.')[0]==wanted.split('.')[0]:
+                      candidates.append(str(url))
+              if not candidates:
+                  base=xmlurl.rsplit('/',1)[0]
+                  candidates.append(base+'/'+wanted)
+              src=candidates[0]
+              r=s.get(src,timeout=120)
+              print('Fig',n,'url',src,'status',r.status_code,'bytes',len(r.content))
+              r.raise_for_status()
+              p=img/('fig%02d.jpg'%n)
+              from io import BytesIO
+              picture=Image.open(BytesIO(r.content))
+              if picture.width<300 or picture.height<200:
+                  raise RuntimeError('Figure %d is suspiciously small'%n)
+              # Retain full publisher figure; convert format only for standard JPEG support.
+              if picture.format=='JPEG':
+                  p.write_bytes(r.content)
+              else:
+                  picture.convert('RGB').save(p,quality=98,subsampling=0)
+              print('Saved',p,'size',p.stat().st_size,'px',picture.size)
+          PY
+
+      - name: Rebuild GitHub-friendly article
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          d=Path('articles/IMAFungus-Fungal-Metatranscriptomics-2026')
+          raw='https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/IMAFungus-Fungal-Metatranscriptomics-2026/images/'
+          a=(d/'article_local.md').read_text(encoding='utf8')
+          (d/'article.md').write_text(a.replace('](images/',']('+raw),encoding='utf8')
+          PY
+
+      - name: Create complete ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloads
+          zipfile='downloads/IMAFungus-Fungal-Metatranscriptomics-2026.zip'
+          rm -f "$zipfile"
+          zip -r "$zipfile" articles/IMAFungus-Fungal-Metatranscriptomics-2026 -x '*/.DS_Store'
+
+      - name: Commit verified article with four figures and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/IMAFungus-Fungal-Metatranscriptomics-2026/article.md \
+                  articles/IMAFungus-Fungal-Metatranscriptomics-2026/images \
+                  downloads/IMAFungus-Fungal-Metatranscriptomics-2026.zip
+          if git diff --cached --quiet; then
+            echo 'No new changes'
+          else
+            git commit -m 'Build IMA Fungus metatranscriptomics article and figures'
+            git push
+          fi
