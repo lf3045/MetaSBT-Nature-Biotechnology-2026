@@ -1,0 +1,55 @@
+name: Build Panfungi mushroom microbiomes article
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-panfungi-mushroom-microbiomes-2026.yml'
+      - 'articles/Panfungi-Mushroom-Microbiomes-2026/article_local.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Inspect published image and PDF sources
+        shell: bash
+        run: |
+          python -m pip install requests beautifulsoup4
+          python - <<'PY'
+          import requests,re
+          from bs4 import BeautifulSoup
+          u='https://www.maxapress.com/article/id/6979765dfa6c580564f2873f'
+          s=requests.Session()
+          s.headers['User-Agent']='Mozilla/5.0 (academic article illustration retrieval)'
+          r=s.get(u,timeout=60)
+          print('Page',r.status_code,'bytes',len(r.content), 'final',r.url)
+          print('First',r.text[:250])
+          soup=BeautifulSoup(r.text,'html.parser')
+          matches=[]
+          for img in soup.select('img'):
+              attr={k:v for k,v in img.attrs.items() if k in ['src','data-src','data-original','alt','title']}
+              pp=str(img.parent.get_text(' ',strip=True))[:140]
+              src=str(attr.get('src') or attr.get('data-src') or '')
+              matches.append((src,attr,pp))
+          print('IMAGE COUNT',len(matches))
+          for idx,item in enumerate(matches[:90]): print('IMAGE',idx,repr(item))
+          for needle in ['Macro- and micro-habitat','Abiotic and biotic','Functions of mushroom-forming','The proposed holistic','fig1','fig. 1','figure1']:
+              j=r.text.lower().find(needle.lower())
+              print('NEEDLE',needle,j,r.text[max(0,j-350):j+300] if j>=0 else '')
+          for p in [
+           'https://www.maxapress.com/data/article/panfungi/preview/pdf/panfungi-0025-0003.pdf',
+           'https://www.maxapress.com/data/article/opr/preview/pdf/panfungi-0025-0003.pdf'
+          ]:
+              try:
+                  v=s.get(p,timeout=75)
+                  print('PDF',p,v.status_code,len(v.content),v.content[:12])
+              except Exception as exc: print('PDF ERR',p,str(exc))
+          PY
