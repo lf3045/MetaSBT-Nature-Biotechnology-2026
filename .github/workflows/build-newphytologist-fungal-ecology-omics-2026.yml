@@ -1,0 +1,197 @@
+name: Build New Phytologist fungal ecology Chinese article
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-newphytologist-fungal-ecology-omics-2026.yml'
+      - 'articles/NewPhytologist-Fungal-Ecology-Omics-2026/article_local.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install figure dependencies
+        run: python -m pip install --disable-pip-version-check pillow requests
+
+      - name: Download complete source figures from PMC Open Access
+        shell: bash
+        run: |
+          python - <<'PY'
+          import re
+          import requests
+          import xml.etree.ElementTree as ET
+          from io import BytesIO
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          from PIL import Image
+
+          rootdir=Path("articles/NewPhytologist-Fungal-Ecology-Omics-2026")
+          out=rootdir/"images"
+          out.mkdir(parents=True,exist_ok=True)
+          s=requests.Session()
+          s.headers["User-Agent"]="Fungal-ecology-article-package/1.0"
+          article_id="PMC13000982"
+          metadata=None
+          for version in range(1,6):
+              u=f"https://pmc-oa-opendata.s3.amazonaws.com/{article_id}.{version}/{article_id}.{version}.json"
+              try:
+                  r=s.get(u,timeout=30)
+                  print("metadata",u,r.status_code)
+                  if r.ok:
+                      metadata=r.json()
+                      break
+              except requests.RequestException as exc:
+                  print("metadata exception:",str(exc))
+          if metadata is None:
+              raise RuntimeError("No PMC Open Access metadata found")
+          print("license_code", metadata.get("license_code"))
+          if "CC BY" not in str(metadata.get("license_code","")).upper().replace("-"," "):
+              raise RuntimeError("Unexpected license; do not sync publicly without checking")
+
+          def to_https(url):
+              url=str(url)
+              if url.startswith("s3://pmc-oa-opendata/"):
+                  url="https://pmc-oa-opendata.s3.amazonaws.com/"+url.removeprefix("s3://pmc-oa-opendata/")
+              return url
+
+          xml_url=to_https(metadata["xml_url"])
+          r=s.get(xml_url,timeout=90)
+          print("xml",xml_url,r.status_code,len(r.content))
+          r.raise_for_status()
+          doc=ET.fromstring(r.content)
+
+          def local_tag(elem):
+              return elem.tag.rsplit("}",1)[-1]
+
+          figures={}
+          for element in doc.iter():
+              if local_tag(element)!="fig":
+                  continue
+              lab=next((el for el in element if local_tag(el)=="label"),None)
+              label="".join(lab.itertext()).strip() if lab is not None else ""
+              match=re.search(r"(?:Fig(?:ure)?\.?\s*)([1-5])(?:\D|$)",label,re.IGNORECASE)
+              if not match:
+                  print("skipped label",repr(label))
+                  continue
+              index=int(match.group(1))
+              graphic=next((el for el in element.iter() if local_tag(el)=="graphic"),None)
+              if graphic is None:
+                  print("figure without graphic",index)
+                  continue
+              target=next((value for key,value in graphic.attrib.items() if key.rsplit("}",1)[-1]=="href"),"")
+              if not target:
+                  print("empty figure href",index)
+                  continue
+              figures[index]=target
+          print("JATS figures",figures)
+
+          media=metadata.get("media_urls") or []
+          print("media count",len(media),"head",repr(media[:4]))
+          urls=[]
+          for item in media:
+              if isinstance(item,dict):
+                  item=next((item.get(k) for k in ["url","media_url","s3_url","href","uri"] if item.get(k)),None)
+              if item:
+                  urls.append(to_https(item))
+
+          def stem(url):
+              leaf=Path(urlsplit(str(url)).path).name.lower()
+              leaf=re.sub(r"\.(jpg|jpeg|tif|tiff|png|webp|gif)$","",leaf)
+              return leaf
+
+          source_lines=[]
+          for i in range(1,6):
+              name=figures.get(i)
+              if not name:
+                  raise RuntimeError(f"Cannot find JATS Figure {i}")
+              expected=stem(name)
+              options=[u for u in urls if stem(u)==expected]
+              if not options:
+                  # Original media directory is next to JATS XML if metadata omits image URLs.
+                  alt=xml_url.split("?",1)[0].rsplit("/",1)[0]+"/"+str(name)
+                  options=[alt]
+              img_response=None
+              for src in options:
+                  r=s.get(src,timeout=100)
+                  print("figure",i,"source",src,"status",r.status_code,"bytes",len(r.content))
+                  if r.ok and len(r.content)>5000:
+                      img_response=(src,r.content)
+                      break
+              if img_response is None:
+                  raise RuntimeError(f"Failed to retrieve complete Figure {i}")
+              src,data=img_response
+              im=Image.open(BytesIO(data))
+              im.load()
+              if min(im.size)<300:
+                  raise RuntimeError(f"Figure {i} looks incomplete {im.size}")
+              p=out/f"fig{i:02d}.jpg"
+              # Preserve publisher image in full; change encoding only if not JPEG.
+              if im.format=="JPEG":
+                  p.write_bytes(data)
+              else:
+                  if im.mode=="RGBA":
+                      bg=Image.new("RGB",im.size,"white")
+                      bg.paste(im,mask=im.getchannel("A"))
+                      im=bg
+                  else:
+                      im=im.convert("RGB")
+                  im.save(p,format="JPEG",quality=97,subsampling=0)
+              source_lines.append((i,src,im.size,p.stat().st_size))
+              print("saved",p,im.size,p.stat().st_size)
+          with (rootdir/"figure_sources.tsv").open("w",encoding="utf-8") as f:
+              f.write("figure\toriginal_url\twidth_height\tbytes\n")
+              for i,u,dim,size in source_lines:
+                  f.write(f"Fig.{i}\t{u}\t{dim[0]}x{dim[1]}\t{size}\n")
+          PY
+
+      - name: Generate online article with absolute image URLs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          d=Path("articles/NewPhytologist-Fungal-Ecology-Omics-2026")
+          local=(d/"article_local.md").read_text(encoding="utf-8")
+          raw="https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/NewPhytologist-Fungal-Ecology-Omics-2026/images/"
+          for i in range(1,6):
+              assert f"images/fig{i:02d}.jpg" in local
+              assert (d/"images"/f"fig{i:02d}.jpg").exists()
+          online=local.replace("](images/","]("+raw)
+          (d/"article.md").write_text(online,encoding="utf-8")
+          PY
+
+      - name: Assemble verified complete ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloads
+          zipfile='downloads/NewPhytologist-Fungal-Ecology-Omics-2026.zip'
+          rm -f "$zipfile"
+          zip -r "$zipfile" articles/NewPhytologist-Fungal-Ecology-Omics-2026 -x '*/.DS_Store'
+          unzip -t "$zipfile"
+
+      - name: Commit generated images and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/NewPhytologist-Fungal-Ecology-Omics-2026/article.md \
+                  articles/NewPhytologist-Fungal-Ecology-Omics-2026/figure_sources.tsv \
+                  articles/NewPhytologist-Fungal-Ecology-Omics-2026/images \
+                  downloads/NewPhytologist-Fungal-Ecology-Omics-2026.zip
+          if git diff --cached --quiet; then
+            echo "No change to commit"
+          else
+            git commit -m 'Sync New Phytologist article figures and ZIP'
+            git push
+          fi
