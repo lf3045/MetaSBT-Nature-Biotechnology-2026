@@ -51,7 +51,9 @@ jobs:
           media=meta.get('media_urls') or []
           xmlurl=meta.get('xml_url')
           print('media URL count',len(media),'xml',xmlurl)
-          xml=s.get(xmlurl,timeout=60)
+          def web_url(url):
+              return str(url).replace('s3://pmc-oa-opendata/','https://pmc-oa-opendata.s3.amazonaws.com/')
+          xml=s.get(web_url(xmlurl),timeout=60)
           xml.raise_for_status()
           root=ET.fromstring(xml.content)
           hrefns='{http://www.w3.org/1999/xlink}href'
@@ -89,9 +91,9 @@ jobs:
                   if name==wanted or name.split('.')[0]==wanted.split('.')[0]:
                       candidates.append(str(url))
               if not candidates:
-                  base=xmlurl.rsplit('/',1)[0]
+                  base=web_url(xmlurl).split('?',1)[0].rsplit('/',1)[0]
                   candidates.append(base+'/'+wanted)
-              src=candidates[0]
+              src=web_url(candidates[0])
               r=s.get(src,timeout=120)
               print('Fig',n,'url',src,'status',r.status_code,'bytes',len(r.content))
               r.raise_for_status()
