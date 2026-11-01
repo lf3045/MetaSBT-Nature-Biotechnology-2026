@@ -1,0 +1,110 @@
+name: Build Nature LECA ancestries article with original figures
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-nature-leca-ancestries-2026.yml'
+      - 'articles/Nature-Eukaryogenesis-Gene-Ancestries-2026/article_local.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install figure utilities
+        run: python -m pip install requests pillow
+      - name: Download and verify four complete original main figures
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from io import BytesIO
+          import requests
+          from PIL import Image
+
+          base=Path("articles/Nature-Eukaryogenesis-Gene-Ancestries-2026")
+          imgdir=base/"images"
+          imgdir.mkdir(parents=True,exist_ok=True)
+          sess=requests.Session()
+          sess.headers.update({"User-Agent":"Mozilla/5.0 (academic open access figure reuse)"})
+          doi="s41586-026-10639-9"
+          obj="41586_2026_10639_Fig%d_HTML.png"
+          source_lines=["figure\toriginal_url\twidth\theight\tpng_bytes"]
+          for num in range(1,5):
+              sources=[
+                  f"https://media.springernature.com/{size}/springer-static/image/art%3A10.1038%2F{doi}/MediaObjects/{obj%num}"
+                  for size in ("full","lw1200","lw685")
+              ]
+              match=None
+              for source in sources:
+                  try:
+                      response=sess.get(source,timeout=90)
+                      print("Fetch",num,source,"code",response.status_code,"bytes",len(response.content))
+                      if not response.ok or len(response.content)<8000: continue
+                      picture=Image.open(BytesIO(response.content))
+                      picture.load()
+                      if picture.width<550 or picture.height<280: continue
+                      match=(source,picture)
+                      break
+                  except Exception as exc:
+                      print("Fetch exception:",str(exc))
+              if match is None:
+                  raise RuntimeError(f"Could not confirm complete Nature Fig.{num}")
+              source,picture=match
+              target=imgdir/f"fig{num:02d}.png"
+              picture.save(target,format="PNG",optimize=True)
+              Image.open(target).verify()
+              print("Verified",target,picture.size,target.stat().st_size)
+              source_lines.append(f"Fig.{num}\t{source}\t{picture.width}\t{picture.height}\t{target.stat().st_size}")
+          (base/"figure_sources.tsv").write_text("\n".join(source_lines)+"\n",encoding="utf8")
+          PY
+
+      - name: Generate valid online Markdown from local version
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          d=Path("articles/Nature-Eukaryogenesis-Gene-Ancestries-2026")
+          local=(d/"article_local.md").read_text(encoding="utf8")
+          for n in range(1,5):
+              image=f"fig{n:02d}.png"
+              assert (d/"images"/image).is_file()
+              assert local.count(f"](images/{image})")==1,image
+          prefix="https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/Nature-Eukaryogenesis-Gene-Ancestries-2026/images/"
+          (d/"article.md").write_text(local.replace("](images/","]("+prefix),encoding="utf8")
+          PY
+
+      - name: Assemble and test complete ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloads
+          output="downloads/Nature-Eukaryogenesis-Gene-Ancestries-2026.zip"
+          rm -f "$output"
+          zip -r "$output" articles/Nature-Eukaryogenesis-Gene-Ancestries-2026 -x '*/.DS_Store'
+          unzip -t "$output"
+
+      - name: Commit generated images, article, and zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add articles/Nature-Eukaryogenesis-Gene-Ancestries-2026/article.md \
+                  articles/Nature-Eukaryogenesis-Gene-Ancestries-2026/images \
+                  articles/Nature-Eukaryogenesis-Gene-Ancestries-2026/figure_sources.tsv \
+                  downloads/Nature-Eukaryogenesis-Gene-Ancestries-2026.zip
+          if git diff --cached --quiet; then
+            echo "Generated files unchanged"
+          else
+            git commit -m "Build verified Nature LECA article and four original figures"
+            git push
+          fi
