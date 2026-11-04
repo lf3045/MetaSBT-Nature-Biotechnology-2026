@@ -80,7 +80,7 @@ jobs:
 
           d=Path("articles/NatureCommunications-CandidaAuris-CNV-SNC-2026")
           source=(d/"article_local.md").read_text(encoding="utf-8")
-          bold=[m for m in re.finditer(r"\*\*([^\n*]+)\*\*",source)]
+          bold=[m for m in re.finditer(r"\*\*([^\n]+?)\*\*",source)]
           bad=[m for m in bold if (
               re.search(r"[\w]",source[m.start()-1:m.start()]) or
               re.search(r"[\w]",source[m.end():m.end()+1])
