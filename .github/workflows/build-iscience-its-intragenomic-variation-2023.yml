@@ -1,0 +1,209 @@
+name: Build iScience fungal ITS article and original figures
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-iscience-its-intragenomic-variation-2023.yml'
+      - 'articles/iScience-Fungal-ITS-Intragenomic-Variation-2023/article_local.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install requests pillow markdown-it-py
+
+      - name: Download complete original graphical abstract and sole main figure
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          from io import BytesIO
+          import xml.etree.ElementTree as ET
+          import requests, hashlib, re
+          from PIL import Image
+
+          p=Path("articles/iScience-Fungal-ITS-Intragenomic-Variation-2023")
+          (p/"images").mkdir(parents=True,exist_ok=True)
+          s=requests.Session()
+          s.headers["User-Agent"]="Mozilla/5.0 (open access academic text and image preservation)"
+          pmc="PMC10387565"
+          meta=None
+          for version in range(1,7):
+              u=f"https://pmc-oa-opendata.s3.amazonaws.com/{pmc}.{version}/{pmc}.{version}.json"
+              try:
+                  r=s.get(u,timeout=35)
+                  print("METADATA",u,r.status_code,len(r.content))
+                  if r.ok:
+                      meta=r.json()
+                      break
+              except Exception as exc:
+                  print("Metadata attempt failed",str(exc))
+          if meta is None:
+              raise RuntimeError("PMC OA metadata not found; do not publish incomplete images")
+          print("license",meta.get("license_code"),"media count",len(meta.get("media_urls") or []))
+          def https_url(u):
+              u=str(u)
+              if u.startswith("s3://pmc-oa-opendata/"):
+                  return "https://pmc-oa-opendata.s3.amazonaws.com/"+u.split("s3://pmc-oa-opendata/",1)[1]
+              return u
+          xml_url=https_url(meta.get("xml_url"))
+          xml_res=s.get(xml_url,timeout=90)
+          xml_res.raise_for_status()
+          xml=ET.fromstring(xml_res.content)
+          def tag(node):
+              return node.tag.rsplit("}",1)[-1]
+          def href(node):
+              for k,v in node.attrib.items():
+                  if k.rsplit("}",1)[-1]=="href":
+                      return v
+              return ""
+          fig_source=None
+          graphical_source=None
+          for elem in xml.iter():
+              if tag(elem)=="fig":
+                  label=next((x for x in elem if tag(x)=="label"),None)
+                  label_text="".join(label.itertext()) if label is not None else ""
+                  if re.search(r"fig(?:ure)?\s*1\b",label_text,re.I):
+                      graphic=next((x for x in elem.iter() if tag(x)=="graphic"),None)
+                      if graphic is not None:
+                          fig_source=href(graphic)
+              if tag(elem)=="abstract" and "graph" in elem.attrib.get("abstract-type","").lower():
+                  graphic=next((x for x in elem.iter() if tag(x)=="graphic"),None)
+                  if graphic is not None:
+                      graphical_source=href(graphic)
+          print("JATS fig1:",fig_source,"graphical:",graphical_source)
+          # Elsevier PMC archives commonly call the graphical abstract fx1 and numbered figure gr1.
+          if not fig_source:
+              fig_source="gr1.jpg"
+          if not graphical_source:
+              graphical_source="fx1.jpg"
+
+          media=[]
+          for item in (meta.get("media_urls") or []):
+              if isinstance(item,dict):
+                  item=next((item.get(key) for key in ("url","media_url","s3_url","href","uri") if item.get(key)),None)
+              if item:
+                  media.append(https_url(item))
+          print("EXAMPLE MEDIA",media[:10])
+          def basename(u):
+              return Path(urlsplit(str(u)).path).name.lower().split("?")[0]
+          def stem(u):
+              return re.sub(r"\.(jpg|jpeg|png|tif|tiff|gif|webp)$","",basename(u))
+          xml_dir=xml_url.split("?",1)[0].rsplit("/",1)[0]
+          def retrieve(source,target_name):
+              candidates=[]
+              orig=basename(source)
+              want=stem(source)
+              for u in media:
+                  if basename(u)==orig or stem(u)==want or basename(u).startswith(want+"."):
+                      candidates.append(u)
+              if source.startswith(("http://","https://","s3://")):
+                  candidates.append(https_url(source))
+              if orig:
+                  candidates.append(xml_dir+"/"+orig)
+              for ext in (".jpg",".jpeg",".png",".tif",".tiff"):
+                  candidates.append(xml_dir+"/"+want+ext)
+              candidates.append("https://pmc.ncbi.nlm.nih.gov/articles/"+pmc+"/bin/"+orig)
+              unique=list(dict.fromkeys(candidates))
+              for u in unique:
+                  try:
+                      r=s.get(u,timeout=90)
+                      print("IMAGE",target_name,r.status_code,len(r.content),u)
+                      if not r.ok or len(r.content)<8000:
+                          continue
+                      image=Image.open(BytesIO(r.content))
+                      image.verify()
+                      image=Image.open(BytesIO(r.content))
+                      image.load()
+                      if min(image.size)<200:
+                          continue
+                      # Preserve original bytes if the published file is JPEG.
+                      if image.format not in ("JPEG","JPG"):
+                          raise RuntimeError("Publisher image is not JPEG: "+u+" "+str(image.format))
+                      path=p/"images"/target_name
+                      path.write_bytes(r.content)
+                      return (u,image.size,len(r.content),hashlib.sha256(r.content).hexdigest())
+                  except Exception as e:
+                      print("IMAGE ERROR",target_name,str(e))
+              raise RuntimeError("Could not retrieve original full figure: "+target_name)
+
+          out=[]
+          for src,dst in [(graphical_source,"graphical_abstract.jpg"),(fig_source,"fig01.jpg")]:
+              u,dim,length,digest=retrieve(src,dst)
+              print("VERIFIED",dst,u,dim,length,digest)
+              out.append((dst,u,dim[0],dim[1],length,digest))
+          (p/"figure_sources.tsv").write_text(
+              "file\toriginal_url\twidth\theight\tbytes\tsha256\n" +
+              "".join(f"{filename}\t{u}\t{width}\t{height}\t{num}\t{digest}\n" for filename,u,width,height,num,digest in out),
+              encoding="utf-8"
+          )
+          PY
+
+      - name: Render-check Chinese Markdown and generate online version
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          from markdown_it import MarkdownIt
+
+          d=Path("articles/iScience-Fungal-ITS-Intragenomic-Variation-2023")
+          source=(d/"article_local.md").read_text(encoding="utf-8")
+          bold=[m for m in re.finditer(r"\*\*([^\n]+?)\*\*",source)]
+          adjacent=[m for m in bold if
+              re.search(r"[\w]",source[m.start()-1:m.start()]) or
+              re.search(r"[\w]",source[m.end():m.end()+1])]
+          assert not adjacent, "Malformed bold separators beside Chinese text"
+          rendered=MarkdownIt().render(source)
+          actual=rendered.count("<strong>")
+          print("Bold spans",len(bold),"rendered",actual)
+          assert actual==len(bold),f"Only {actual}/{len(bold)} bold spans rendered"
+          for filename in ("fig01.jpg","graphical_abstract.jpg"):
+              assert source.count("](images/"+filename+")")==1,filename
+              assert (d/"images"/filename).is_file(),filename
+          raw="https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/iScience-Fungal-ITS-Intragenomic-Variation-2023/images/"
+          online=source.replace("](images/","]("+raw)
+          (d/"article.md").write_text(online,encoding="utf-8")
+          assert MarkdownIt().render(online).count("<strong>")==actual
+          print("SUCCESS all bold spans and original image references validated")
+          PY
+
+      - name: Create downloadable complete ZIP and test integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloads
+          z=downloads/iScience-Fungal-ITS-Intragenomic-Variation-2023.zip
+          rm -f "$z"
+          zip -r "$z" articles/iScience-Fungal-ITS-Intragenomic-Variation-2023 -x '*/.DS_Store'
+          unzip -t "$z"
+
+      - name: Commit final public files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            articles/iScience-Fungal-ITS-Intragenomic-Variation-2023/article.md \
+            articles/iScience-Fungal-ITS-Intragenomic-Variation-2023/images \
+            articles/iScience-Fungal-ITS-Intragenomic-Variation-2023/figure_sources.tsv \
+            downloads/iScience-Fungal-ITS-Intragenomic-Variation-2023.zip
+          if git diff --cached --quiet; then
+              echo "No changes to commit"
+          else
+              git commit -m "Publish iScience fungal ITS article with original figures and ZIP"
+              git push
+          fi
