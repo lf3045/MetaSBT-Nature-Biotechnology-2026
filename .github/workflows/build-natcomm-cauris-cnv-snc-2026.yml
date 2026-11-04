@@ -1,0 +1,129 @@
+name: Build Nature Communications C auris CNV and SNC article
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-natcomm-cauris-cnv-snc-2026.yml'
+      - 'articles/NatureCommunications-CandidaAuris-CNV-SNC-2026/article_local.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install image and Markdown validation dependencies
+        run: python -m pip install --disable-pip-version-check requests Pillow markdown-it-py
+
+      - name: Download publisher original images and verify byte-level integrity
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from io import BytesIO
+          import hashlib
+          import requests
+          from PIL import Image
+
+          d=Path("articles/NatureCommunications-CandidaAuris-CNV-SNC-2026")
+          imdir=d/"images"
+          imdir.mkdir(parents=True,exist_ok=True)
+          session=requests.Session()
+          session.headers.update({"User-Agent":"Mozilla/5.0 (non-commercial academic article figure citation)"})
+          fighead="41467_2026_75437_Fig"
+          base="https://media.springernature.com/{size}/springer-static/image/art%3A10.1038%2Fs41467-026-75437-3/MediaObjects/"
+          lines=["figure\toriginal_url\twidth\theight\tbytes\tsha256"]
+          for num in range(1,7):
+              selected=None
+              for size in ("full","lw1200","lw685"):
+                  url=base.format(size=size)+fighead+str(num)+"_HTML.png"
+                  try:
+                      resp=session.get(url,timeout=95)
+                      print("Figure",num,size,resp.status_code,len(resp.content))
+                      if not resp.ok or len(resp.content)<8000:continue
+                      if not resp.content.startswith(bytes.fromhex("89504e470d0a1a0a")):continue
+                      picture=Image.open(BytesIO(resp.content))
+                      picture.verify()
+                      picture=Image.open(BytesIO(resp.content))
+                      if min(picture.size)<350:continue
+                      selected=(url,resp.content,picture.size)
+                      break
+                  except Exception as e:
+                      print("Figure fetch attempt error:",str(e))
+              if selected is None:
+                  raise RuntimeError(f"Unable to obtain complete publisher Fig.{num}")
+              url,data,dimensions=selected
+              target=imdir/f"fig{num:02d}.png"
+              # Save unmodified publisher PNG bytes: CC BY-NC-ND prohibits adaptations.
+              target.write_bytes(data)
+              assert target.read_bytes()==data
+              digest=hashlib.sha256(data).hexdigest()
+              lines.append(f"Fig.{num}\t{url}\t{dimensions[0]}\t{dimensions[1]}\t{len(data)}\t{digest}")
+              print("Verified full publisher file",target,dimensions,len(data),digest)
+          (d/"figure_sources.tsv").write_text("\n".join(lines)+"\n",encoding="utf-8")
+          PY
+
+      - name: Validate Chinese Markdown bold and image links
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          from markdown_it import MarkdownIt
+
+          d=Path("articles/NatureCommunications-CandidaAuris-CNV-SNC-2026")
+          source=(d/"article_local.md").read_text(encoding="utf-8")
+          bold=[m for m in re.finditer(r"\*\*([^\n*]+)\*\*",source)]
+          bad=[m for m in bold if (
+              re.search(r"[\w]",source[m.start()-1:m.start()]) or
+              re.search(r"[\w]",source[m.end():m.end()+1])
+          )]
+          assert not bad,"Inline bold delimiters adjacent to words: "+str(bad[:5])
+          rendered=MarkdownIt().render(source)
+          strong=rendered.count("<strong>")
+          assert strong==len(bold),f"Markdown parser rendered {strong}/{len(bold)} bold spans"
+          for n in range(1,7):
+              name=f"fig{n:02d}.png"
+              assert source.count("](images/"+name+")")==1,name
+              assert (d/"images"/name).is_file(),name
+          print("Markdown strong emphasis spans:",strong,"/",len(bold))
+          prefix="https://raw.githubusercontent.com/lf3045/MetaSBT-Nature-Biotechnology-2026/main/articles/NatureCommunications-CandidaAuris-CNV-SNC-2026/images/"
+          online=source.replace("](images/","]("+prefix)
+          (d/"article.md").write_text(online,encoding="utf-8")
+          assert MarkdownIt().render(online).count("<strong>")==strong
+          print("Online and offline Markdown validated with all six original figures.")
+          PY
+
+      - name: Create and test complete ZIP file
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloads
+          output='downloads/NatureCommunications-CandidaAuris-CNV-SNC-2026.zip'
+          rm -f "$output"
+          zip -r "$output" articles/NatureCommunications-CandidaAuris-CNV-SNC-2026 -x '*/.DS_Store'
+          unzip -t "$output"
+
+      - name: Publish generated assets to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add articles/NatureCommunications-CandidaAuris-CNV-SNC-2026/article.md \
+                  articles/NatureCommunications-CandidaAuris-CNV-SNC-2026/images \
+                  articles/NatureCommunications-CandidaAuris-CNV-SNC-2026/figure_sources.tsv \
+                  downloads/NatureCommunications-CandidaAuris-CNV-SNC-2026.zip
+          if git diff --cached --quiet; then
+              echo "All generated files unchanged"
+          else
+              git commit -m "Publish C auris CNV and SNC article with six unmodified figures"
+              git push
+          fi
