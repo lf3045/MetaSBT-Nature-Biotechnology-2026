@@ -1,0 +1,73 @@
+name: Package Nature Microbiology low-biomass contamination article
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-natmicro-lowbiomass-2025.yml'
+      - 'articles/NatureMicrobiology-LowBiomass-Contamination-2025/article.md'
+      - 'articles/NatureMicrobiology-LowBiomass-Contamination-2025/README.md'
+      - 'articles/NatureMicrobiology-LowBiomass-Contamination-2025/figure_manifest.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Markdown parser
+        run: python -m pip install --disable-pip-version-check markdown-it-py
+      - name: Validate bold, images, tables and license
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          from markdown_it import MarkdownIt
+          d=Path("articles/NatureMicrobiology-LowBiomass-Contamination-2025")
+          content=(d/"article.md").read_text(encoding="utf-8")
+          spans=list(re.finditer(r"\*\*([^\n]+?)\*\*",content))
+          bad=[m.group() for m in spans if (
+              re.search(r"[\w]",content[m.start()-1:m.start()])
+              or re.search(r"[\w]",content[m.end():m.end()+1])
+          )]
+          assert not bad,("Unrenderable emphasis",bad[:5])
+          rendered=MarkdownIt().render(content)
+          count=rendered.count("<strong>")
+          assert len(spans)==49 and count==49,(len(spans),count)
+          assert len(re.findall(r"(?m)^## ",content))==10
+          for n in (1,2):
+              assert content.count(f"https://www.nature.com/articles/s41564-025-02035-2/figures/{n}")==1
+          for n in (1,2,3):
+              assert f"#Tab{n}" in content
+          assert not (d/"images").exists(),"Do not redistribute publisher-owned images"
+          print("PASS: 49/49 bold, 10 sections, 2 figure links, 3 table links, no copied figures")
+          PY
+      - name: Create and test public text ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloads
+          zipfile='downloads/NatureMicrobiology-LowBiomass-Contamination-2025.zip'
+          rm -f "$zipfile"
+          zip -r "$zipfile" articles/NatureMicrobiology-LowBiomass-Contamination-2025 -x '*/.DS_Store'
+          unzip -t "$zipfile"
+      - name: Commit validated archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add downloads/NatureMicrobiology-LowBiomass-Contamination-2025.zip
+          if git diff --cached --quiet; then
+            echo 'Archive unchanged'
+          else
+            git commit -m 'Package low-biomass contamination consensus Chinese review'
+            git push
+          fi
